@@ -1,7 +1,10 @@
+import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
-import 'package:flutter_tts/flutter_tts.dart';
+import 'ble_demo.dart';
 
 void main() {
   runApp(const MyApp());
@@ -14,119 +17,226 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return const MaterialApp(
       title: 'Sign Language Detection',
-      home: MyHomePage(),
+      home: ASLInterpreterPage(), // Set ASLInterpreterPage as the default home page
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key});
+// ASL Interpreter Page
+class ASLInterpreterPage extends StatefulWidget {
+  const ASLInterpreterPage({super.key});
 
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  _ASLInterpreterPageState createState() => _ASLInterpreterPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  final SpeechToText _speechToText = SpeechToText();
+class _ASLInterpreterPageState extends State<ASLInterpreterPage> {
   FlutterTts flutterTts = FlutterTts();
+  final SpeechToText _speechToText = SpeechToText();
   bool _speechEnabled = false;
-  String _lastWords = 'Tap the microphone to start listening';
+  String _lastWords = "Tap the microphone to start listening";
+  String _randomText = "Simulated input will appear here"; // Store the accumulated text
+  int _itemCount = 0; // Track the number of items added
+
+  // List of random text values
+  final List<String> randomValues = [
+    "hello",
+    "goodbye",
+    "please",
+    "thank you",
+    "yes",
+    "no",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K"
+  ];
+
+  Timer? _timer; // Timer for appending values
 
   @override
   void initState() {
     super.initState();
-    _initSpeech();
+    _initSpeech(); // Initialize speech recognition on startup
   }
 
-  /// This has to happen only once per app
+  // Initialize speech-to-text
   void _initSpeech() async {
     _speechEnabled = await _speechToText.initialize();
-    await flutterTts.awaitSpeakCompletion(true);
     setState(() {});
   }
 
-  /// Each time to start a speech recognition session
+  // Start listening for speech input
   void _startListening() async {
     await _speechToText.listen(onResult: _onSpeechResult);
     setState(() {});
   }
 
-  /// Manually stop the active speech recognition session
-  /// Note that there are also timeouts that each platform enforces
-  /// and the SpeechToText plugin supports setting timeouts on the
-  /// listen method.
+  // Stop listening for speech input
   void _stopListening() async {
     await _speechToText.stop();
     setState(() {});
   }
 
-  /// This is the callback that the SpeechToText plugin calls when
-  /// the platform returns recognized words.
+  // Callback when speech is recognized
   void _onSpeechResult(SpeechRecognitionResult result) {
     setState(() {
       _lastWords = result.recognizedWords;
     });
   }
 
-  Future _startSpeaking() async {
-    await flutterTts.speak(_lastWords);
+  // Generate and append random value every second
+  void _simulateText() {
+    // Reset before starting
+    _randomText = "";
+    _itemCount = 0;
+    _timer?.cancel(); // Cancel any previous timer
+
+    // Start the timer to append one value every second
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_itemCount < 5) {
+        // Pick a random value
+        final randomIndex = Random().nextInt(randomValues.length);
+        final newWord = randomValues[randomIndex];
+
+        // Append the new word to the randomText and speak it
+        setState(() {
+          _randomText += (_itemCount == 0 ? "" : " ") + newWord;
+          _itemCount++;
+        });
+
+        _speakText(newWord); // Speak the newly added word
+      } else {
+        // Stop the timer after 5 items have been added
+        timer.cancel();
+      }
+    });
+  }
+
+  // Speak the text aloud
+  Future<void> _speakText(String text) async {
+    await flutterTts.speak(text);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel(); // Cancel the timer when the widget is disposed
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sign Language Interpreter'),
+        title: const Text('ASL Interpreter'),
       ),
-      body: Stack(
-        children: <Widget>[
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
+      drawer: _buildDrawer(context),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Header for the top section
+              const Text(
+                'ASL Interpreter',
+                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+
+              // Text box for random generated words
               Container(
                 padding: const EdgeInsets.all(16),
-                child: const Text(
-                  'Recognized words:',
-                  style: TextStyle(fontSize: 20.0),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _randomText,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 24),
                 ),
               ),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(_lastWords),
+              const SizedBox(height: 20),
+
+              // Simulate button
+              ElevatedButton(
+                onPressed: _simulateText,
+                child: const Text("Simulate"),
+              ),
+              const SizedBox(height: 40), // Space between the two sections
+
+              // Header for the bottom section
+              const Text(
+                'Speech-to-text',
+                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+
+              // Text box for speech recognition results
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey),
+                  borderRadius: BorderRadius.circular(8),
                 ),
+                child: Text(
+                  _lastWords,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 24),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Listen button to start speech recognition
+              ElevatedButton(
+                onPressed: _speechToText.isNotListening ? _startListening : _stopListening,
+                child: Text(_speechToText.isNotListening ? "Listen" : "Stop Listening"),
               ),
             ],
           ),
-          Padding(
-            padding: EdgeInsets.all(16.0),
-            child:
-              Align(
-                alignment: Alignment.bottomRight,
-                child: 
-                  FloatingActionButton(
-                    onPressed:
-                        // If not yet listening for speech start, otherwise stop
-                        _speechToText.isNotListening ? _startListening : _stopListening,
-                    tooltip: 'Listen',
-                    child: Icon(_speechToText.isNotListening ? Icons.mic_off : Icons.mic),
-                  ),
-              ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDrawer(BuildContext context) {
+    return Drawer(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          const DrawerHeader(
+            decoration: BoxDecoration(
+              color: Colors.blue,
+            ),
+            child: Text('Menu'),
           ),
-          Padding(
-            padding: EdgeInsets.all(16.0),
-            child:
-              Align(
-                alignment: Alignment.bottomLeft,
-                child: 
-                  FloatingActionButton(
-                    onPressed:
-                        _startSpeaking,
-                    tooltip: 'Speak',
-                    child: const Icon(Icons.volume_up),
-                  ),
-              ),
-          )
+          ListTile(
+            title: const Text('ASL Interpreter'),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const ASLInterpreterPage()),
+              );
+            },
+          ),
+          ListTile(
+            title: const Text('BLE Demo'),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const BLEDemoPage()),
+              );
+            },
+          ),
         ],
       ),
     );

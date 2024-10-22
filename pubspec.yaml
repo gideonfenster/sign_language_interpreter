@@ -35,6 +35,8 @@ dependencies:
   permission_handler: ^10.2.0
   speech_to_text: ^7.0.0
   flutter_tts: ^4.0.2
+  flutter_blue_plus: ^1.33.5
+  tflite_flutter: ^0.11.0
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -61,7 +63,8 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
-
+  assets:
+    - assets/asl_model.tflite
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
