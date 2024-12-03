@@ -1,63 +1,108 @@
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'dart:typed_data';
 import 'package:tflite_flutter/tflite_flutter.dart';
+import 'bluetooth_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'app_drawer.dart';
 
 class BLEDataIngestionPage extends StatefulWidget {
-  const BLEDataIngestionPage({Key? key, required this.device}) : super(key: key);
-  final BluetoothDevice device;
+  const BLEDataIngestionPage({Key? key}) : super(key: key);
 
   @override
   _BLEDataIngestionPageState createState() => _BLEDataIngestionPageState();
 }
 
 class _BLEDataIngestionPageState extends State<BLEDataIngestionPage> {
-  BluetoothCharacteristic? targetCharacteristic;
-  StreamSubscription<List<int>>? notificationSubscription;
-  List<List<double>> dataWindow = []; // Stores the last 3 seconds of data
-  bool _isConnecting = false;
-  bool _isConnected = false;
-  Timer? uiUpdateTimer;
-  Timer? _inferenceTimer;
+  final int windowSize = 150;
+  List<List<double>> dataWindow = [];
 
   Interpreter? _interpreter;
   String _predictionResult = '';
   int _dataWindowSize = 0;
-  List<List<double>> _dataSnapshot = [];
-
-  // **New variable to store probabilities**
   List<double> _probabilities = [];
+
+  int _dataReceivedCount = 0;
+  int _dataReceivedPerSecond = 0;
+  Timer? _dataCountTimer;
+
+  StreamSubscription<List<double>>? _dataSubscription;
+  StreamSubscription<bool>? _connectionSubscription;
+  bool _isConnected = false;
+
+  Timer? uiUpdateTimer;
+  Timer? _inferenceTimer;
+
+  Color _backgroundColor = Colors.white;
+  Color _textColor = Colors.black;
+  double _textSize = 24;
 
   @override
   void initState() {
     super.initState();
+    _loadSettings();
     _loadModel().then((_) {
       print('Model loaded, starting timers');
       _startTimers();
     });
-    _connect(widget.device);
+
+    final bluetoothManager = BluetoothManager();
+    _isConnected = bluetoothManager.isConnected;
+
+    _connectionSubscription = bluetoothManager.connectionStream.listen((status) {
+      setState(() {
+        _isConnected = status;
+      });
+    });
+
+    _dataSubscription = bluetoothManager.dataStream.listen((dataPoints) {
+      setState(() {
+        dataWindow.add(dataPoints);
+        if (dataWindow.length > windowSize) {
+          dataWindow.removeAt(0);
+        }
+        _dataWindowSize = dataWindow.length;
+        _dataReceivedCount++;
+      });
+    });
+  }
+
+  Future<void> _loadSettings() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() {
+      int bgColorValue = prefs.getInt('backgroundColor') ?? Colors.white.value;
+      int textColorValue = prefs.getInt('textColor') ?? Colors.black.value;
+      double textSize = prefs.getDouble('textSize') ?? 24;
+
+      _backgroundColor = Color(bgColorValue);
+      _textColor = Color(textColorValue);
+      _textSize = textSize;
+    });
   }
 
   void _startTimers() {
-    // Start a timer to run the model every second
-    _inferenceTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+    _inferenceTimer = Timer.periodic(Duration(milliseconds: 100), (timer) {
       _runModel();
     });
-    // Start a timer to update the UI every second
-    uiUpdateTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+
+    uiUpdateTimer = Timer.periodic(Duration(milliseconds: 100), (timer) {
+      setState(() {});
+    });
+
+    _dataCountTimer = Timer.periodic(Duration(seconds: 1), (timer) {
       setState(() {
-        // Trigger UI update
+        _dataReceivedPerSecond = _dataReceivedCount;
+        _dataReceivedCount = 0;
       });
     });
   }
 
   @override
   void dispose() {
-    notificationSubscription?.cancel();
+    _dataSubscription?.cancel();
+    _connectionSubscription?.cancel();
     uiUpdateTimer?.cancel();
     _inferenceTimer?.cancel();
-    _disconnect();
+    _dataCountTimer?.cancel();
     super.dispose();
   }
 
@@ -71,131 +116,32 @@ class _BLEDataIngestionPageState extends State<BLEDataIngestionPage> {
     }
   }
 
-  void _connect(BluetoothDevice device) async {
-    if (_isConnecting) return;
-    _isConnecting = true;
-
-    try {
-      print("Connecting to device...");
-      await device.connect();
-      setState(() {
-        _isConnected = true;
-      });
-      print("Connected to device");
-
-      // Listen for disconnection
-      device.connectionState.listen((state) {
-        if (state == BluetoothConnectionState.disconnected) {
-          print("Device disconnected");
-          setState(() {
-            _isConnected = false;
-            targetCharacteristic = null;
-            dataWindow.clear();
-            _predictionResult = '';
-            _dataWindowSize = 0;
-            _dataSnapshot.clear();
-            _probabilities.clear();
-          });
-          notificationSubscription?.cancel();
-        }
-      });
-
-      // Discover services and characteristics
-      await _discoverServices(device);
-    } catch (e) {
-      print("Connection error: $e");
-    } finally {
-      _isConnecting = false;
-    }
-  }
-
-  Future<void> _discoverServices(BluetoothDevice device) async {
-    List<BluetoothService> services = await device.discoverServices();
-    for (BluetoothService service in services) {
-      if (service.uuid == Guid('A07498CA-AD5B-474E-940D-16F1FBE7E8CD')) {
-        for (BluetoothCharacteristic c in service.characteristics) {
-          if (c.uuid == Guid('51FF12BB-3ED8-46E5-B4F9-D64E2FEC021B') && c.properties.notify) {
-            targetCharacteristic = c;
-            _startListening();
-            return;
-          }
-        }
-      }
-    }
-    print("Target characteristic not found");
-  }
-
-  void _startListening() async {
-    if (targetCharacteristic == null) return;
-    // Enable notifications
-    await targetCharacteristic!.setNotifyValue(true);
-
-    // Listen to the value changes
-    notificationSubscription = targetCharacteristic!.value.listen((value) {
-      _processData(value);
-    });
-  }
-
-  void _processData(List<int> value) {
-    // Parse the byte array into six float values
-    if (value.length >= 24) { // Each float is 4 bytes, 6 floats = 24 bytes
-      ByteData byteData = ByteData.sublistView(Uint8List.fromList(value));
-      List<double> dataPoints = [];
-      for (int i = 0; i < 24; i += 4) {
-        double dataPoint = byteData.getFloat32(i, Endian.little);
-        dataPoints.add(dataPoint);
-      }
-      // Add dataPoints to dataWindow
-      setState(() {
-        dataWindow.add(dataPoints);
-        // Keep only the last 60 samples (3 seconds at 20 Hz)
-        if (dataWindow.length > 60) {
-          dataWindow.removeAt(0);
-        }
-        _dataWindowSize = dataWindow.length;
-      });
-    } else {
-      print("Received data of unexpected length: ${value.length}");
-    }
-  }
-
   void _runModel() async {
     if (_interpreter == null) {
       print("Interpreter is null");
       return;
     }
 
-    // Check if dataWindow has enough data
-    if (dataWindow.length < 60) {
+    if (dataWindow.length < windowSize) {
       print('Not enough data to run the model');
       return;
     }
 
-    // Prepare input tensor
-    int timeSteps = 60;
-    int numFeatures = 6;
-
-    // Reshape dataWindow into [1, 60, 6]
     List<List<List<double>>> inputData = [dataWindow];
 
-    // Create output buffer
     var outputShape = _interpreter!.getOutputTensor(0).shape;
-    print('Output tensor shape: $outputShape'); // Should print [1, 26]
+    print('Output tensor shape: $outputShape');
 
-    // Create output buffer matching the output shape
     List<List<double>> outputData = List.generate(
       outputShape[0],
       (_) => List.filled(outputShape[1], 0.0),
     );
 
-    // Run inference
     try {
       _interpreter!.run(inputData, outputData);
 
-      // Since outputData is now List<List<double>>, access the first element
       List<double> probabilities = outputData[0];
 
-      // Find the predicted class
       double maxValue = -double.infinity;
       int predictedIndex = -1;
       for (int i = 0; i < probabilities.length; i++) {
@@ -205,10 +151,8 @@ class _BLEDataIngestionPageState extends State<BLEDataIngestionPage> {
         }
       }
 
-      // Map index to letter (assuming A-Z corresponds to indices 0-25)
       String predictedLetter = String.fromCharCode(65 + predictedIndex);
 
-      // Take a snapshot of the last 5 data points
       int snapshotSize = 5;
       List<List<double>> snapshot = [];
       if (dataWindow.length >= snapshotSize) {
@@ -220,8 +164,7 @@ class _BLEDataIngestionPageState extends State<BLEDataIngestionPage> {
       setState(() {
         _predictionResult = predictedLetter;
         _dataWindowSize = dataWindow.length;
-        _dataSnapshot = snapshot;
-        _probabilities = probabilities; // **Store probabilities for display**
+        _probabilities = probabilities;
       });
       print('Predicted letter: $_predictionResult');
     } catch (e) {
@@ -229,18 +172,6 @@ class _BLEDataIngestionPageState extends State<BLEDataIngestionPage> {
     }
   }
 
-  void _disconnect() async {
-    if (_isConnected) {
-      try {
-        await widget.device.disconnect();
-        print("Disconnected from device");
-      } catch (e) {
-        print("Error disconnecting: $e");
-      }
-    }
-  }
-
-  // **Helper function to get the alphabet letters**
   List<String> _getAlphabetLetters() {
     return List.generate(26, (index) => String.fromCharCode(65 + index));
   }
@@ -251,8 +182,22 @@ class _BLEDataIngestionPageState extends State<BLEDataIngestionPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('BLE Data Ingestion'),
+        title: Text('BLE Data Ingestion',
+          style: TextStyle(
+                color: _textColor,
+              )),
+        iconTheme: IconThemeData(
+          color: _textColor,
+        ),
+        backgroundColor: _backgroundColor,
       ),
+      drawer: AppDrawer(
+        backgroundColor: _backgroundColor,
+        textColor: _textColor,
+        textSize: _textSize,
+        reloadSettings: _loadSettings,
+      ),
+      backgroundColor: _backgroundColor,
       body: Center(
         child: _isConnected
             ? Column(
@@ -260,18 +205,22 @@ class _BLEDataIngestionPageState extends State<BLEDataIngestionPage> {
                 children: [
                   Text(
                     'Prediction Result: $_predictionResult',
-                    style: TextStyle(fontSize: 24),
+                    style: TextStyle(fontSize: _textSize + 4, color: _textColor),
                   ),
                   SizedBox(height: 10),
                   Text(
                     'Data Window Size: $_dataWindowSize',
-                    style: TextStyle(fontSize: 20),
+                    style: TextStyle(fontSize: _textSize, color: _textColor),
                   ),
                   SizedBox(height: 10),
-                  // **Display the probabilities**
+                  Text(
+                    'Data Received per Second: $_dataReceivedPerSecond',
+                    style: TextStyle(fontSize: _textSize, fontWeight: FontWeight.bold, color: _textColor),
+                  ),
+                  SizedBox(height: 20),
                   Text(
                     'Letter Probabilities:',
-                    style: TextStyle(fontSize: 20),
+                    style: TextStyle(fontSize: _textSize, color: _textColor),
                   ),
                   SizedBox(height: 10),
                   Expanded(
@@ -284,7 +233,7 @@ class _BLEDataIngestionPageState extends State<BLEDataIngestionPage> {
                               return ListTile(
                                 leading: Text(
                                   letter,
-                                  style: TextStyle(fontSize: 18),
+                                  style: TextStyle(fontSize:  _textSize - 2, color: _textColor),
                                 ),
                                 title: LinearProgressIndicator(
                                   value: probability,
@@ -292,21 +241,21 @@ class _BLEDataIngestionPageState extends State<BLEDataIngestionPage> {
                                 ),
                                 trailing: Text(
                                   '${(probability * 100).toStringAsFixed(2)}%',
-                                  style: TextStyle(fontSize: 16),
+                                  style: TextStyle(fontSize: _textSize - 2, color: _textColor),
                                 ),
                               );
                             },
                           )
                         : Text(
                             'Running inference...',
-                            style: TextStyle(fontSize: 18),
+                            style: TextStyle(fontSize: _textSize - 2, color: _textColor),
                           ),
                   ),
                 ],
               )
             : Text(
                 'Connecting...',
-                style: TextStyle(fontSize: 24),
+                style: TextStyle(fontSize: _textSize + 4, color: _textColor),
               ),
       ),
     );
