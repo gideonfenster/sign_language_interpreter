@@ -227,7 +227,7 @@ class _InterpreterPageState extends State<InterpreterPage> with SingleTickerProv
         print('Predicted letter: $_predictionResult with confidence ${(maxValue * 100).toStringAsFixed(2)}%');
 
         predictionResults.add(_predictionResult);
-        timestamps.insert(0, DateTime.now());
+        timestamps.add(DateTime.now());
 
         while (timestamps.isNotEmpty &&
             DateTime.now().difference(timestamps.first).inSeconds > 30) {
