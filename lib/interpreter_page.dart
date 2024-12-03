@@ -226,13 +226,13 @@ class _InterpreterPageState extends State<InterpreterPage> with SingleTickerProv
         });
         print('Predicted letter: $_predictionResult with confidence ${(maxValue * 100).toStringAsFixed(2)}%');
 
-        predictionResults.insert(0, _predictionResult);
+        predictionResults.add(_predictionResult);
         timestamps.insert(0, DateTime.now());
 
         while (timestamps.isNotEmpty &&
-            DateTime.now().difference(timestamps.last).inSeconds > 30) {
-          predictionResults.removeLast();
-          timestamps.removeLast();
+            DateTime.now().difference(timestamps.first).inSeconds > 30) {
+          predictionResults.removeAt(0);
+          timestamps.removeAt(0);
         }
         String temp = "";
         for (String res in predictionResults) {
