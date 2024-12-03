@@ -67,6 +67,8 @@ class BluetoothManager {
 
   Future<void> _startListening() async {
     if (_targetCharacteristic == null) return;
+    await _notificationSubscription?.cancel();
+    _notificationSubscription = null;
     await _targetCharacteristic!.setNotifyValue(true);
     _notificationSubscription = _targetCharacteristic!.value.listen((value) {
       _processData(value);
